@@ -1,12 +1,15 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude when working with code in this repository.
 
 ## Commands
 
 ```bash
 # Build
 mvn clean package
+
+# Build without tests
+mvn clean package -DskipTests
 
 # Run locally
 mvn spring-boot:run
@@ -17,77 +20,112 @@ mvn test
 # Run a single test class
 mvn test -Dtest=ClassName
 
-# Build Docker image
+# Docker build
 docker build -t plantogether-chat-service .
-
-# Run with Docker
-docker run -p 8086:8081 \
+docker run -p 8086:8086 \
   -e DB_USER=postgres -e DB_PASSWORD=postgres \
   -e REDIS_HOST=host.docker.internal \
   -e KEYCLOAK_URL=http://host.docker.internal:8180 \
   plantogether-chat-service
 ```
 
-**Prerequisites:** Java 21, Maven 3.9+, running PostgreSQL + Redis + RabbitMQ + Keycloak instances.
+**Prerequisites:** Java 21, Maven 3.9+, running PostgreSQL + Redis + Keycloak.
 
 ## Architecture
 
-Real-time group chat microservice for trips. Part of the PlanTogether platform (microservices architecture with Eureka service discovery).
+Spring Boot 3.3.6 microservice (Java 21). Provides real-time group chat for trips via WebSocket (STOMP).
 
-**Port:** 8086
-**Base package:** `com.plantogether.chat`
+**Port:** REST + WebSocket `8086` (no gRPC server)
 
-### Key Layers
+**Package:** `com.plantogether.chat`
 
-- **WebSocket (STOMP)** — Primary interface. Endpoint `/ws` with SockJS fallback. Broker prefixes: `/topic`, `/queue`; app prefix: `/app`; user prefix: `/user`.
-- **REST API** — Secondary interface for message history, search, pin/unpin, edit, delete under `/api/trips/{tripId}/messages`.
-- **Service / Repository / Model / DTO** — Packages exist but are empty; business logic is yet to be implemented.
-- **Security** — OAuth2 JWT resource server backed by Keycloak. All WebSocket connections require a Bearer token.
+### Package structure
 
-### WebSocket Channels
+```
+com.plantogether.chat/
+├── config/          # SecurityConfig, WebSocketConfig, RabbitConfig
+├── controller/      # STOMP message handlers + REST history controller
+├── domain/          # JPA entity (Message)
+├── repository/      # Spring Data JPA
+├── service/         # Business logic
+├── dto/             # Request/Response DTOs (Lombok @Data @Builder)
+├── grpc/
+│   └── client/      # TripGrpcClient (CheckMembership → trip-service:9081)
+└── event/
+    └── publisher/   # RabbitMQ publishers (ChatMessageSent)
+```
+
+### Infrastructure dependencies
+
+| Dependency | Default (local) | Purpose |
+|---|---|---|
+| PostgreSQL 16 | `localhost:5432/plantogether_chat` | Message persistence (db_chat) |
+| Redis | `localhost:6379` | WebSocket session distribution (pub/sub for horizontal scaling) |
+| RabbitMQ | `localhost:5672` | Outbound domain events |
+| Keycloak 24+ | `localhost:8180` | JWT auth (JWK set URI) |
+| trip-service gRPC | `localhost:9081` | CheckMembership before accepting messages |
+
+
+### Domain model (db_chat)
+
+**`message`** — id (UUID), trip_id (UUID), sender_id (Keycloak UUID), content (TEXT), type (`TEXT`/`IMAGE`/`SYSTEM`),
+pinned_at (TIMESTAMP nullable), created_at.
+
+No separate reactions or presence tables (client-side resolution). `SYSTEM` type is reserved for service-generated
+messages (e.g. expense created, member joined notifications relayed from other services).
+
+### WebSocket (STOMP)
+
+Endpoint: `/ws` (HTTP upgrade, SockJS fallback). All connections require a Bearer token in the handshake.
 
 | Direction | Destination | Purpose |
-|-----------|-------------|---------|
-| Subscribe | `/topic/trips/{tripId}/messages` | Broadcast messages |
-| Subscribe | `/topic/trips/{tripId}/presence` | Presence events |
-| Subscribe | `/user/queue/trips/{tripId}/notifications` | Private notifications |
-| Send | `/app/trips/{tripId}/message/send` | Send a message |
-| Send | `/app/trips/{tripId}/message/react` | Add emoji reaction |
-| Send | `/app/trips/{tripId}/message/pin` | Pin a message |
-| Send | `/app/trips/{tripId}/presence` | Update presence status |
+|---|---|---|
+| SUBSCRIBE | `/topic/trips/{tripId}/chat` | Receive all messages in a trip chat |
+| SUBSCRIBE | `/topic/trips/{tripId}/updates` | Receive real-time updates (expenses, votes, etc.) from other services |
+| SUBSCRIBE | `/user/queue/notifications` | Private notifications for the connected user |
+| SEND | `/app/trips/{tripId}/chat` | Send a message `{ content, type }` |
 
-### Infrastructure Dependencies
+**Important:** display names and avatars are **not resolved server-side**. Messages are stored with `sender_id`
+(Keycloak UUID). The Flutter client resolves the display name from its in-memory member list. This avoids gRPC
+calls on the hot path.
 
-| Service | Purpose | Default (local) |
-|---------|---------|-----------------|
-| PostgreSQL 16 | Message persistence | `localhost:5432/plantogether_chat` |
-| Redis | WebSocket session distribution (pub/sub) | `localhost:6379` |
-| RabbitMQ | Outbound domain events | `localhost:5672` |
-| Keycloak 24+ | JWT auth (JWK set URI) | `http://localhost:8180` |
-| MinIO | Image storage | `http://localhost:9000` |
-| Eureka | Service discovery | `http://localhost:8761/eureka/` |
+### REST API
 
-### Database Schema
+| Method | Endpoint | Notes |
+|---|---|---|
+| GET | `/api/v1/trips/{tripId}/messages` | Message history (paginated) |
 
-Managed by **Flyway** (`classpath:db/migration`). Hibernate is set to `validate` — never auto-creates schema.
+### RabbitMQ events
 
-Current schema (`V1__init_schema.sql`) has a minimal `messages` table. The full data model (see README) includes `message_reactions` and `chat_presence` tables that still need to be migrated.
+**Publishes** (exchange `plantogether.events`):
+- `chat.message.sent` — routing key `chat.message.sent` — when a new message is saved (consumed by notification-service)
 
-**Full intended model:**
-- `messages`: id (UUID), trip_id, keycloak_id (sender), content (max 5000), type (TEXT/IMAGE/LINK/SYSTEM), image_key, link_url, pinned_at, pinned_by, edited_at, created_at
-- `message_reactions`: id, message_id (FK), keycloak_id, emoji, created_at
-- `chat_presence`: trip_id, keycloak_id, status (ONLINE/OFFLINE/IDLE), last_seen_at
+This service does **not** consume trip or member events directly. The `/topic/trips/{tripId}/updates` STOMP channel
+can relay events published by other services if needed (via a shared consumer).
 
-### RabbitMQ Events Published
+### Security
 
-- `MessageSent` — new message created
-- `MessageDeleted` — message deleted
-- `UserPresenceChanged` — presence status changed
+- Stateless JWT via `KeycloakJwtConverter` — `realm_access.roles` → `ROLE_<ROLE>` Spring authorities
+- WebSocket connections authenticated via Bearer token in the HTTP handshake header
+- ORGANIZER can pin messages or delete others' messages; users can only edit/delete their own (within 2h)
+- Zero PII stored — only Keycloak UUIDs
 
-### Business Rules
+### Horizontal scaling
 
-- Users can only edit/delete their own messages (within 2h of creation).
-- Only trip organizers can pin messages or delete others' messages.
-- SYSTEM message type is reserved for service-generated messages.
-- No PII stored — only Keycloak UUIDs.
-- Redis pub/sub enables horizontal scaling: multiple service instances all relay messages to their connected clients.
+Redis pub/sub enables multiple chat-service instances: each instance subscribes to Redis channels for the trips
+its connected clients are watching, and relays messages to them. Stateless regarding WebSocket routing.
+
+### Environment variables
+
+| Variable | Default |
+|---|---|
+| `DB_HOST` | `localhost` |
+| `DB_USER` | `plantogether` |
+| `DB_PASSWORD` | `plantogether` |
+| `RABBITMQ_HOST` | `localhost` |
+| `REDIS_HOST` | `localhost` |
+| `REDIS_PORT` | `6379` |
+| `KEYCLOAK_URL` | `http://localhost:8180` |
+| `TRIP_SERVICE_GRPC_HOST` | `localhost` |
+| `TRIP_SERVICE_GRPC_PORT` | `9081` |
+
