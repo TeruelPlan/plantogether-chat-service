@@ -29,11 +29,11 @@ docker run -p 8086:8086 \
   plantogether-chat-service
 ```
 
-**Prerequisites:** Java 25, Maven 3.9+, running PostgreSQL + Redis + Keycloak.
+**Prerequisites:** Java 21, Maven 3.9+, running PostgreSQL + Redis + Keycloak.
 
 ## Architecture
 
-Spring Boot 3.3.6 microservice (Java 25). Provides real-time group chat for trips via WebSocket (STOMP).
+Spring Boot 3.3.6 microservice (Java 21). Provides real-time group chat for trips via WebSocket (STOMP).
 
 **Port:** REST + WebSocket `8086` (no gRPC server)
 
