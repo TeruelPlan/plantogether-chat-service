@@ -28,7 +28,7 @@ docker run -p 8086:8086 \
   plantogether-chat-service
 ```
 
-**Prerequisites:** Java 21, Maven 3.9+, running PostgreSQL + Redis + Keycloak.
+**Prerequisites:** Java 25, Maven 3.9+, running PostgreSQL + Redis.
 
 ## Architecture
 
