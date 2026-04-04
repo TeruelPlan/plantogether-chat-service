@@ -1,69 +1,69 @@
 # Chat Service
 
-> Service de messagerie temps réel par voyage (WebSocket STOMP)
+> Real-time messaging service per trip (WebSocket STOMP)
 
-## Rôle dans l'architecture
+## Role in the Architecture
 
-Le Chat Service fournit la messagerie temps réel au sein de chaque voyage via WebSocket STOMP. Les messages sont
-persistés en base et le display_name de l'expéditeur est résolu côté Flutter (qui dispose déjà de la liste des
-membres en mémoire) — le serveur ne stocke que le `keycloak_id`. Il n'expose pas de serveur gRPC.
+The Chat Service provides real-time messaging within each trip via WebSocket STOMP. Messages are persisted
+in the database, and the display name of the sender is resolved client-side by Flutter (which already holds
+the member list in memory) — the server only stores the `device_id`. It does not expose a gRPC server.
 
-## Fonctionnalités
+## Features
 
-- Messagerie temps réel via WebSocket STOMP
-- Persistance des messages (TEXT / IMAGE / SYSTEM)
-- Messages épinglés (`pinned_at`)
-- Canal de mises à jour temps réel (dépenses, votes, tâches)
-- Notifications personnelles par utilisateur
-- Vérification d'appartenance au trip via gRPC avant connexion
+- Real-time messaging via WebSocket STOMP
+- Message persistence (TEXT / IMAGE / SYSTEM)
+- Pinned messages (`pinned_at`)
+- Real-time update channel (expenses, votes, tasks)
+- Personal notifications per user
+- Trip membership verification via gRPC before connection
 
-## API WebSocket STOMP
+## WebSocket STOMP API
 
-La connexion WebSocket s'établit sur `/ws` avec le token Bearer dans les headers STOMP.
+The WebSocket connection is established on `/ws` with the `X-Device-Id` header in the STOMP connect headers.
 
 | Type | Destination | Description |
 |------|-------------|-------------|
-| CONNECT | `/ws` | Connexion WebSocket (upgrade HTTP, header `Authorization: Bearer {token}`) |
-| SUBSCRIBE | `/topic/trips/{id}/chat` | Recevoir les messages du trip |
-| SUBSCRIBE | `/topic/trips/{id}/updates` | Mises à jour temps réel (dépenses, votes, tâches) |
-| SEND | `/app/trips/{id}/chat` | Envoyer un message `{ content, type }` |
-| SUBSCRIBE | `/user/queue/notifications` | Notifications personnelles |
+| CONNECT | `/ws` | WebSocket connection (HTTP upgrade, `X-Device-Id` header) |
+| SUBSCRIBE | `/topic/trips/{id}/chat` | Receive trip messages |
+| SUBSCRIBE | `/topic/trips/{id}/updates` | Real-time updates (expenses, votes, tasks) |
+| SEND | `/app/trips/{id}/chat` | Send a message `{ content, type }` |
+| SUBSCRIBE | `/user/queue/notifications` | Personal notifications |
 
 ## gRPC Client
 
-- `TripService.CheckMembership(tripId, userId)` — vérification d'appartenance à la connexion STOMP
+- `TripService.IsMember(tripId, deviceId)` — membership verification at STOMP subscription
 
-## Modèle de données (`db_chat`)
+## Data Model (`db_chat`)
 
 **message**
 
-| Colonne | Type | Description |
-|---------|------|-------------|
-| `id` | UUID PK | Identifiant unique (UUID v7) |
-| `trip_id` | UUID NOT NULL | Référence au trip |
-| `sender_id` | UUID NOT NULL | keycloak_id de l'expéditeur |
-| `content` | TEXT NOT NULL | Contenu du message |
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID PK | Unique identifier (UUID v7) |
+| `trip_id` | UUID NOT NULL | Trip reference |
+| `sender_id` | UUID NOT NULL | device_id of the sender |
+| `content` | TEXT NOT NULL | Message content |
 | `type` | ENUM NOT NULL | TEXT / IMAGE / SYSTEM |
-| `pinned_at` | TIMESTAMP NULLABLE | Date d'épinglage (null = non épinglé) |
+| `pinned_at` | TIMESTAMP NULLABLE | Pin date (null = not pinned) |
 | `created_at` | TIMESTAMP NOT NULL | |
 
-> La résolution du `display_name` et de l'`avatar_url` est effectuée côté Flutter, qui maintient la liste des membres du trip en mémoire. Le serveur ne stocke et ne transmet que le `keycloak_id`.
+> Display name and avatar resolution is performed client-side by Flutter, which maintains the trip member list in memory. The server only stores and transmits the `device_id`.
 
-## Événements RabbitMQ (Exchange : `plantogether.events`)
+## RabbitMQ Events (Exchange: `plantogether.events`)
 
-**Publie :**
+**Publishes:**
 
-| Routing Key | Déclencheur |
-|-------------|-------------|
-| `chat.message.sent` | Nouveau message envoyé |
+| Routing Key | Trigger |
+|-------------|---------|
+| `chat.message.sent` | New message sent |
 
-**Consomme :** aucun (les mises à jour temps réel sur `/topic/trips/{id}/updates` sont déclenchées directement par les autres services via STOMP ou par consommation d'événements RabbitMQ selon l'implémentation)
+**Consumes:** none (real-time updates on `/topic/trips/{id}/updates` are triggered directly by other services via STOMP or by consuming RabbitMQ events depending on implementation)
 
 ## Rate Limiting
 
-| Règle | Limite |
-|-------|--------|
-| Connexions WebSocket | 5 connexions simultanées par utilisateur |
+| Rule | Limit |
+|------|-------|
+| WebSocket connections | 5 simultaneous connections per device |
 
 ## Configuration
 
@@ -90,27 +90,29 @@ grpc:
       address: static://trip-service:9081
 ```
 
-## Lancer en local
+## Running Locally
 
 ```bash
-# Prérequis : docker compose --profile essential up -d
-# + plantogether-proto et plantogether-common installés
+# Prerequisites: docker compose up -d
+# + plantogether-proto and plantogether-common installed
 
 mvn spring-boot:run
 ```
 
-## Dépendances
+## Dependencies
 
-- **Keycloak 24+** : validation JWT (token STOMP header)
-- **PostgreSQL 16** (`db_chat`) : persistance des messages
-- **RabbitMQ** : publication d'événements (`chat.message.sent`)
-- **Trip Service** (gRPC 9081) : vérification d'appartenance
-- **plantogether-proto** : contrats gRPC (client)
-- **plantogether-common** : DTOs events, CorsConfig
+- **PostgreSQL 16** (`db_chat`): message persistence
+- **RabbitMQ**: event publishing (`chat.message.sent`)
+- **Redis**: WebSocket session distribution (pub/sub for horizontal scaling)
+- **Trip Service** (gRPC 9081): membership verification
+- **plantogether-proto**: gRPC contracts (client)
+- **plantogether-common**: event DTOs, DeviceIdFilter, SecurityAutoConfiguration, CorsConfig
 
-## Sécurité
+## Security
 
-- La connexion WebSocket requiert un token Bearer valide (transmis dans les headers STOMP)
-- L'appartenance au trip est vérifiée via gRPC à l'abonnement
-- Zero PII stockée (uniquement des `keycloak_id`)
-- 5 connexions WebSocket simultanées max par utilisateur (rate limiting)
+- Anonymous device-based identity: `X-Device-Id` header on every request and in STOMP connect headers
+- `DeviceIdFilter` (from plantogether-common, auto-configured via `SecurityAutoConfiguration`) extracts the device UUID and sets the SecurityContext principal
+- No JWT, no Keycloak, no login, no sessions
+- Trip membership is verified via gRPC at subscription
+- Zero PII stored (only `device_id` references)
+- 5 simultaneous WebSocket connections max per device (rate limiting)

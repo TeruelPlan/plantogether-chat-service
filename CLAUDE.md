@@ -25,11 +25,10 @@ docker build -t plantogether-chat-service .
 docker run -p 8086:8086 \
   -e DB_USER=postgres -e DB_PASSWORD=postgres \
   -e REDIS_HOST=host.docker.internal \
-  -e KEYCLOAK_URL=http://host.docker.internal:8180 \
   plantogether-chat-service
 ```
 
-**Prerequisites:** Java 25, Maven 3.9+, running PostgreSQL + Redis + Keycloak.
+**Prerequisites:** Java 21, Maven 3.9+, running PostgreSQL + Redis + Keycloak.
 
 ## Architecture
 
@@ -43,14 +42,14 @@ Spring Boot 3.3.6 microservice (Java 25). Provides real-time group chat for trip
 
 ```
 com.plantogether.chat/
-├── config/          # SecurityConfig, WebSocketConfig, RabbitConfig
+├── config/          # WebSocketConfig, RabbitConfig
 ├── controller/      # STOMP message handlers + REST history controller
 ├── domain/          # JPA entity (Message)
 ├── repository/      # Spring Data JPA
 ├── service/         # Business logic
 ├── dto/             # Request/Response DTOs (Lombok @Data @Builder)
 ├── grpc/
-│   └── client/      # TripGrpcClient (CheckMembership → trip-service:9081)
+│   └── client/      # TripGrpcClient (IsMember → trip-service:9081)
 └── event/
     └── publisher/   # RabbitMQ publishers (ChatMessageSent)
 ```
@@ -62,13 +61,12 @@ com.plantogether.chat/
 | PostgreSQL 16 | `localhost:5432/plantogether_chat` | Message persistence (db_chat) |
 | Redis | `localhost:6379` | WebSocket session distribution (pub/sub for horizontal scaling) |
 | RabbitMQ | `localhost:5672` | Outbound domain events |
-| Keycloak 24+ | `localhost:8180` | JWT auth (JWK set URI) |
-| trip-service gRPC | `localhost:9081` | CheckMembership before accepting messages |
+| trip-service gRPC | `localhost:9081` | IsMember before accepting messages |
 
 
 ### Domain model (db_chat)
 
-**`message`** — id (UUID), trip_id (UUID), sender_id (Keycloak UUID), content (TEXT), type (`TEXT`/`IMAGE`/`SYSTEM`),
+**`message`** — id (UUID), trip_id (UUID), sender_id (device UUID), content (TEXT), type (`TEXT`/`IMAGE`/`SYSTEM`),
 pinned_at (TIMESTAMP nullable), created_at.
 
 No separate reactions or presence tables (client-side resolution). `SYSTEM` type is reserved for service-generated
@@ -76,7 +74,7 @@ messages (e.g. expense created, member joined notifications relayed from other s
 
 ### WebSocket (STOMP)
 
-Endpoint: `/ws` (HTTP upgrade, SockJS fallback). All connections require a Bearer token in the handshake.
+Endpoint: `/ws` (HTTP upgrade, SockJS fallback). All connections require an `X-Device-Id` header in the STOMP connect headers.
 
 | Direction | Destination | Purpose |
 |---|---|---|
@@ -86,7 +84,7 @@ Endpoint: `/ws` (HTTP upgrade, SockJS fallback). All connections require a Beare
 | SEND | `/app/trips/{tripId}/chat` | Send a message `{ content, type }` |
 
 **Important:** display names and avatars are **not resolved server-side**. Messages are stored with `sender_id`
-(Keycloak UUID). The Flutter client resolves the display name from its in-memory member list. This avoids gRPC
+(device UUID). The Flutter client resolves the display name from its in-memory member list. This avoids gRPC
 calls on the hot path.
 
 ### REST API
@@ -105,10 +103,13 @@ can relay events published by other services if needed (via a shared consumer).
 
 ### Security
 
-- Stateless JWT via `KeycloakJwtConverter` — `realm_access.roles` → `ROLE_<ROLE>` Spring authorities
-- WebSocket connections authenticated via Bearer token in the HTTP handshake header
+- Anonymous device-based identity via `DeviceIdFilter` (from `plantogether-common`, auto-configured via `SecurityAutoConfiguration`)
+- `X-Device-Id` header extracted and set as SecurityContext principal
+- No JWT, no Keycloak, no login, no sessions
+- No SecurityConfig.java needed — `SecurityAutoConfiguration` handles everything
+- WebSocket connections authenticated via `X-Device-Id` header in the STOMP connect handshake
 - ORGANIZER can pin messages or delete others' messages; users can only edit/delete their own (within 2h)
-- Zero PII stored — only Keycloak UUIDs
+- Zero PII stored — only device UUIDs
 
 ### Horizontal scaling
 
@@ -125,7 +126,5 @@ its connected clients are watching, and relays messages to them. Stateless regar
 | `RABBITMQ_HOST` | `localhost` |
 | `REDIS_HOST` | `localhost` |
 | `REDIS_PORT` | `6379` |
-| `KEYCLOAK_URL` | `http://localhost:8180` |
 | `TRIP_SERVICE_GRPC_HOST` | `localhost` |
 | `TRIP_SERVICE_GRPC_PORT` | `9081` |
-
