@@ -63,6 +63,7 @@ class DeviceIdChannelInterceptorTest {
     @Test
     void connectWithMissingDeviceIdHeader_principalRemainsNull() {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.CONNECT);
+        accessor.setLeaveMutable(true);
         Message<byte[]> message = MessageBuilder
                 .createMessage(new byte[0], accessor.getMessageHeaders());
 
@@ -109,6 +110,7 @@ class DeviceIdChannelInterceptorTest {
         UUID deviceId = UUID.randomUUID();
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SEND);
         accessor.addNativeHeader(SecurityConstants.DEVICE_ID_HEADER, deviceId.toString());
+        accessor.setLeaveMutable(true);
         Message<byte[]> message = MessageBuilder
                 .createMessage(new byte[0], accessor.getMessageHeaders());
 
@@ -126,6 +128,7 @@ class DeviceIdChannelInterceptorTest {
     private Message<byte[]> buildStompConnect(String deviceIdHeaderValue) {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.CONNECT);
         accessor.addNativeHeader(SecurityConstants.DEVICE_ID_HEADER, deviceIdHeaderValue);
+        accessor.setLeaveMutable(true); // keep headers mutable so the interceptor can call setUser()
         return MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
     }
 }
