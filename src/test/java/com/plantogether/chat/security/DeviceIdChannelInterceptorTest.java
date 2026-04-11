@@ -63,7 +63,6 @@ class DeviceIdChannelInterceptorTest {
     @Test
     void connectWithMissingDeviceIdHeader_principalRemainsNull() {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.CONNECT);
-        accessor.setLeaveMutable(true);
         Message<byte[]> message = MessageBuilder
                 .createMessage(new byte[0], accessor.getMessageHeaders());
 
