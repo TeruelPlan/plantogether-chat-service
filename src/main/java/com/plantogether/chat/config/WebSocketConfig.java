@@ -12,28 +12,26 @@ import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerCo
 @EnableWebSocketMessageBroker
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
-    private final DeviceIdChannelInterceptor deviceIdChannelInterceptor;
+  private final DeviceIdChannelInterceptor deviceIdChannelInterceptor;
 
-    public WebSocketConfig(DeviceIdChannelInterceptor deviceIdChannelInterceptor) {
-        this.deviceIdChannelInterceptor = deviceIdChannelInterceptor;
-    }
+  public WebSocketConfig(DeviceIdChannelInterceptor deviceIdChannelInterceptor) {
+    this.deviceIdChannelInterceptor = deviceIdChannelInterceptor;
+  }
 
-    @Override
-    public void registerStompEndpoints(StompEndpointRegistry registry) {
-        registry.addEndpoint("/ws")
-                .setAllowedOriginPatterns("*")
-                .withSockJS();
-    }
+  @Override
+  public void registerStompEndpoints(StompEndpointRegistry registry) {
+    registry.addEndpoint("/ws").setAllowedOriginPatterns("*").withSockJS();
+  }
 
-    @Override
-    public void configureMessageBroker(MessageBrokerRegistry registry) {
-        registry.enableSimpleBroker("/topic", "/queue");
-        registry.setApplicationDestinationPrefixes("/app");
-        registry.setUserDestinationPrefix("/user");
-    }
+  @Override
+  public void configureMessageBroker(MessageBrokerRegistry registry) {
+    registry.enableSimpleBroker("/topic", "/queue");
+    registry.setApplicationDestinationPrefixes("/app");
+    registry.setUserDestinationPrefix("/user");
+  }
 
-    @Override
-    public void configureClientInboundChannel(ChannelRegistration registration) {
-        registration.interceptors(deviceIdChannelInterceptor);
-    }
+  @Override
+  public void configureClientInboundChannel(ChannelRegistration registration) {
+    registration.interceptors(deviceIdChannelInterceptor);
+  }
 }
